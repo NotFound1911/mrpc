@@ -2,7 +2,6 @@ package mrpc
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net"
@@ -10,16 +9,19 @@ import (
 )
 
 type Server struct {
-	services map[string]Service
+	services map[string]reflectionStub
 }
 
 func NewServer() *Server {
 	return &Server{
-		services: make(map[string]Service, 16),
+		services: make(map[string]reflectionStub, 16),
 	}
 }
 func (s *Server) RegisterService(service Service) {
-	s.services[service.Name()] = service
+	s.services[service.Name()] = reflectionStub{
+		s:     service,
+		value: reflect.ValueOf(service),
+	}
 }
 
 func (s *Server) Start(network, addr string) error {
@@ -39,6 +41,19 @@ func (s *Server) Start(network, addr string) error {
 		}()
 	}
 }
+func (s *Server) Invoke(ctx context.Context, req *Request) (*Response, error) {
+	service, ok := s.services[req.ServiceName]
+	if !ok {
+		return nil, errors.New("调用的服务不存在")
+	}
+	resp, err := service.invoke(ctx, req.MethodName, req.Arg)
+	if err != nil {
+		return nil, err
+	}
+	return &Response{
+		Data: resp,
+	}, nil
+}
 
 // 请求组成:
 // part1. 长度字段，用固定字节表示
@@ -46,58 +61,41 @@ func (s *Server) Start(network, addr string) error {
 // 响应也是这个规范
 func (s *Server) handleConn(conn net.Conn) error {
 	for {
-		// lenBs 长度字段的字节表示
-		lenBs := make([]byte, numOfLengthBytes)
-		_, err := conn.Read(lenBs)
+		reqBs, err := ReadMsg(conn)
 		if err != nil {
 			return err
 		}
-		// 获取消息长度
-		length := binary.BigEndian.Uint64(lenBs)
-
-		reqBs := make([]byte, length)
-		_, err = conn.Read(reqBs)
+		// 还原调用信息
+		req := &Request{}
+		err = json.Unmarshal(reqBs, req)
 		if err != nil {
 			return err
 		}
-
-		respData, err := s.handleMsg(reqBs)
+		resp, err := s.Invoke(context.Background(), req)
 		if err != nil {
 			return err
 		}
-		respLen := len(respData)
-
-		// 构建响应数据
-		res := make([]byte, respLen+numOfLengthBytes)
-		// step1.写入长度
-		binary.BigEndian.PutUint64(res[:numOfLengthBytes], uint64(respLen))
-		// step2.写入数据
-		copy(res[numOfLengthBytes:], respData)
-
+		res := EncodeMsg(resp.Data)
 		if _, err = conn.Write(res); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func (s *Server) handleMsg(reqData []byte) ([]byte, error) {
-	// 还原调用信息
-	req := &Request{}
-	err := json.Unmarshal(reqData, req)
-	if err != nil {
-		return nil, err
-	}
-	service, ok := s.services[req.ServiceName]
-	if !ok {
-		return nil, errors.New("调用的服务不存在")
-	}
-	val := reflect.ValueOf(service)
-	method := val.MethodByName(req.MethodName)
+
+type reflectionStub struct {
+	s     Service
+	value reflect.Value
+}
+
+func (s *reflectionStub) invoke(ctx context.Context, methodName string, data []byte) ([]byte, error) {
+	// 反射找到方法 并执行调用
+	method := s.value.MethodByName(methodName)
 	in := make([]reflect.Value, 2)
 
 	in[0] = reflect.ValueOf(context.Background())
 	inReq := reflect.New(method.Type().In(1).Elem())
-	err = json.Unmarshal(req.Arg, inReq.Interface())
+	err := json.Unmarshal(data, inReq.Interface())
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +106,5 @@ func (s *Server) handleMsg(reqData []byte) ([]byte, error) {
 	if results[1].Interface() != nil {
 		return nil, results[1].Interface().(error)
 	}
-	resp, err := json.Marshal(results[0].Interface())
-	return resp, err
+	return json.Marshal(results[0].Interface())
 }
