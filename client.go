@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/NotFound1911/mrpc/message"
 	"github.com/silenceper/pool"
 	"net"
 	"reflect"
@@ -55,7 +56,7 @@ func setFuncField(service Service, p Proxy) error {
 			}
 			// 创建Request对象
 			// 根据函数字段构建请求
-			req := &Request{
+			req := &message.Request{
 				ServiceName: service.Name(),
 				MethodName:  fieldTyp.Name,
 				Arg:         reqData,
@@ -105,7 +106,7 @@ func NewClient(addr string) (*Client, error) {
 		pool: p,
 	}, nil
 }
-func (c Client) Invoke(ctx context.Context, req *Request) (*Response, error) {
+func (c Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -115,7 +116,7 @@ func (c Client) Invoke(ctx context.Context, req *Request) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Response{
+	return &message.Response{
 		Data: resp,
 	}, nil
 }

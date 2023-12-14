@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/NotFound1911/mrpc/message"
 	"net"
 	"reflect"
 )
@@ -41,7 +42,7 @@ func (s *Server) Start(network, addr string) error {
 		}()
 	}
 }
-func (s *Server) Invoke(ctx context.Context, req *Request) (*Response, error) {
+func (s *Server) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
 	service, ok := s.services[req.ServiceName]
 	if !ok {
 		return nil, errors.New("调用的服务不存在")
@@ -50,7 +51,7 @@ func (s *Server) Invoke(ctx context.Context, req *Request) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Response{
+	return &message.Response{
 		Data: resp,
 	}, nil
 }
@@ -66,7 +67,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 			return err
 		}
 		// 还原调用信息
-		req := &Request{}
+		req := &message.Request{}
 		err = json.Unmarshal(reqBs, req)
 		if err != nil {
 			return err
