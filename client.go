@@ -29,11 +29,14 @@ func setFuncField(service Service, p Proxy) error {
 	if typ.Kind() != reflect.Pointer || typ.Elem().Kind() != reflect.Struct {
 		return errors.New("mrpc: 只支持指向结构体的一级指针")
 	}
+	// 获取指针指向的实际数值和类型
 	val = val.Elem()
 	typ = typ.Elem()
 
 	numField := typ.NumField()
+	// numField 为Proxy方法数量
 	for i := 0; i < numField; i++ {
+		// 获取字段的类型和值
 		fieldTyp := typ.Field(i)
 		fieldVal := val.Field(i)
 
@@ -43,30 +46,36 @@ func setFuncField(service Service, p Proxy) error {
 		// 本地调用捕捉到的地方
 		fn := func(args []reflect.Value) (results []reflect.Value) {
 			ctx := args[0].Interface().(context.Context)
+			// retVal 是一个指向输出参数类型的新指针，用于存储远程调用的结果
 			retVal := reflect.New(fieldTyp.Type.Out(0).Elem())
+			// 将请求数据序列化为JSON
 			reqData, err := json.Marshal(args[1].Interface())
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
 			}
+			// 创建Request对象
+			// 根据函数字段构建请求
 			req := &Request{
 				ServiceName: service.Name(),
 				MethodName:  fieldTyp.Name,
 				Arg:         reqData,
 			}
 
-			// 发起调用
+			// 发起调用，调用代理对象的Invoke方法
 			resp, err := p.Invoke(ctx, req)
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
 			}
+			// 将响应数据解析为目标结构体并赋值给retVal
 			err = json.Unmarshal(resp.Data, retVal.Interface())
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
 			}
 			return []reflect.Value{retVal, reflect.Zero(reflect.TypeOf(new(error)).Elem())}
 		}
-		// 设置值
+		// 使用反射创建一个函数值
 		fnVal := reflect.MakeFunc(fieldTyp.Type, fn)
+		// 设置字段的值为创建的函数值
 		fieldVal.Set(fnVal)
 	}
 	return nil

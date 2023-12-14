@@ -90,17 +90,20 @@ type reflectionStub struct {
 
 func (s *reflectionStub) invoke(ctx context.Context, methodName string, data []byte) ([]byte, error) {
 	// 反射找到方法 并执行调用
+	// s.value是通过反射保存的结构体 MethodByName是结构体的方法
 	method := s.value.MethodByName(methodName)
 	in := make([]reflect.Value, 2)
 
 	in[0] = reflect.ValueOf(context.Background())
 	inReq := reflect.New(method.Type().In(1).Elem())
+	// 解析请求
 	err := json.Unmarshal(data, inReq.Interface())
 	if err != nil {
 		return nil, err
 	}
+	// 第二个参数是根据方法的输入参数类型动态创建的指针类型的值，它会被用来接收传入的数据
 	in[1] = inReq
-	results := method.Call(in)
+	results := method.Call(in) // 调用结构体方法
 	// results[0] 返回值
 	// results[1] error
 	if results[1].Interface() != nil {

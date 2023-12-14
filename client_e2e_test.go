@@ -16,7 +16,7 @@ func TestInitClientProxy(t *testing.T) {
 		t.Log("err:", err)
 	}()
 	time.Sleep(time.Second * 3)
-	usClient := &UserService{}
+	usClient := &UserService{} // 客户端服务
 	err := InitClientProxy(":8081", usClient)
 	require.NoError(t, err)
 	resp, err := usClient.GetById(context.Background(), &GetByIdReq{Id: 123})

@@ -2,11 +2,10 @@ package mrpc
 
 import (
 	"context"
-	"log"
 )
 
 type UserService struct {
-	GetById func(ctx context.Context, req *GetByIdReq) (*GetByIdResp, error)
+	GetById func(ctx context.Context, req *GetByIdReq) (*GetByIdResp, error) // 一个GetById方法
 }
 
 func (u UserService) Name() string {
@@ -24,7 +23,6 @@ type UserServiceServer struct {
 }
 
 func (u *UserServiceServer) GetById(ctx context.Context, req *GetByIdReq) (*GetByIdResp, error) {
-	log.Println("req:", req)
 	return &GetByIdResp{
 		Msg: "test",
 	}, nil
