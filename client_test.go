@@ -3,6 +3,7 @@ package mrpc
 import (
 	"context"
 	"errors"
+	"github.com/NotFound1911/mrpc/message"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -37,11 +38,11 @@ func Test_setFuncField(t *testing.T) {
 			service: &UserService{},
 			mock: func(controller *gomock.Controller) Proxy {
 				p := NewMockProxy(controller)
-				p.EXPECT().Invoke(gomock.Any(), &Request{
+				p.EXPECT().Invoke(gomock.Any(), &message.Request{
 					ServiceName: "user-service",
 					MethodName:  "GetById",
-					Arg:         []byte(`{"Id":123}`),
-				}).Return(&Response{}, nil)
+					Data:        []byte(`{"Id":123}`),
+				}).Return(&message.Response{}, nil)
 				return p
 			},
 		},

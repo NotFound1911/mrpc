@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/NotFound1911/mrpc/message"
 	"github.com/silenceper/pool"
 	"net"
 	"reflect"
@@ -29,11 +30,14 @@ func setFuncField(service Service, p Proxy) error {
 	if typ.Kind() != reflect.Pointer || typ.Elem().Kind() != reflect.Struct {
 		return errors.New("mrpc: 只支持指向结构体的一级指针")
 	}
+	// 获取指针指向的实际数值和类型
 	val = val.Elem()
 	typ = typ.Elem()
 
 	numField := typ.NumField()
+	// numField 为Proxy方法数量
 	for i := 0; i < numField; i++ {
+		// 获取字段的类型和值
 		fieldTyp := typ.Field(i)
 		fieldVal := val.Field(i)
 
@@ -43,30 +47,50 @@ func setFuncField(service Service, p Proxy) error {
 		// 本地调用捕捉到的地方
 		fn := func(args []reflect.Value) (results []reflect.Value) {
 			ctx := args[0].Interface().(context.Context)
+			// retVal 是一个指向输出参数类型的新指针，用于存储远程调用的结果
 			retVal := reflect.New(fieldTyp.Type.Out(0).Elem())
+			// 将请求数据序列化为JSON
 			reqData, err := json.Marshal(args[1].Interface())
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
 			}
-			req := &Request{
+			// 创建Request对象
+			// 根据函数字段构建请求
+			req := &message.Request{
 				ServiceName: service.Name(),
 				MethodName:  fieldTyp.Name,
-				Arg:         reqData,
+				Data:        reqData,
 			}
-
-			// 发起调用
+			req.CalHeaderLen()
+			req.CalBodyLen()
+			// 发起调用，调用代理对象的Invoke方法
 			resp, err := p.Invoke(ctx, req)
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
 			}
-			err = json.Unmarshal(resp.Data, retVal.Interface())
-			if err != nil {
-				return []reflect.Value{retVal, reflect.ValueOf(err)}
+			var retErr error
+			if len(resp.Error) > 0 {
+				retErr = errors.New(string(resp.Error))
 			}
-			return []reflect.Value{retVal, reflect.Zero(reflect.TypeOf(new(error)).Elem())}
+			if len(resp.Data) > 0 {
+				// 将响应数据解析为目标结构体并赋值给retVal
+				err = json.Unmarshal(resp.Data, retVal.Interface())
+				if err != nil {
+					// 反序列化的err
+					return []reflect.Value{retVal, reflect.ValueOf(err)}
+				}
+			}
+			var retErrVal reflect.Value
+			if retErr == nil {
+				retErrVal = reflect.Zero(reflect.TypeOf(new(error)).Elem())
+			} else {
+				retErrVal = reflect.ValueOf(retErr)
+			}
+			return []reflect.Value{retVal, retErrVal}
 		}
-		// 设置值
+		// 使用反射创建一个函数值
 		fnVal := reflect.MakeFunc(fieldTyp.Type, fn)
+		// 设置字段的值为创建的函数值
 		fieldVal.Set(fnVal)
 	}
 	return nil
@@ -96,19 +120,14 @@ func NewClient(addr string) (*Client, error) {
 		pool: p,
 	}, nil
 }
-func (c Client) Invoke(ctx context.Context, req *Request) (*Response, error) {
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
+func (c Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
+	data := message.EncodeReq(req)
 	// 把请求发送至服务端
 	resp, err := c.Send(data)
 	if err != nil {
 		return nil, err
 	}
-	return &Response{
-		Data: resp,
-	}, nil
+	return message.DecodeResp(resp), nil
 }
 
 func (c *Client) Send(data []byte) ([]byte, error) {
@@ -120,8 +139,7 @@ func (c *Client) Send(data []byte) ([]byte, error) {
 	defer func() {
 		c.pool.Put(val)
 	}()
-	req := EncodeMsg(data)
-	_, err = conn.Write(req)
+	_, err = conn.Write(data)
 	if err != nil {
 		return nil, err
 	}
