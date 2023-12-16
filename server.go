@@ -47,13 +47,18 @@ func (s *Server) Invoke(ctx context.Context, req *message.Request) (*message.Res
 	if !ok {
 		return nil, errors.New("调用的服务不存在")
 	}
-	resp, err := service.invoke(ctx, req.MethodName, req.Arg)
-	if err != nil {
-		return nil, err
+	resp := &message.Response{
+		RequestID:  req.RequestID,
+		Version:    req.Version,
+		Compresser: req.Compresser,
+		Serializer: req.Serializer,
 	}
-	return &message.Response{
-		Data: resp,
-	}, nil
+	respData, err := service.invoke(ctx, req.MethodName, req.Data)
+	resp.Data = respData
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
 }
 
 // 请求组成:
@@ -67,17 +72,19 @@ func (s *Server) handleConn(conn net.Conn) error {
 			return err
 		}
 		// 还原调用信息
-		req := &message.Request{}
-		err = json.Unmarshal(reqBs, req)
+		req := message.DecodeReq(reqBs)
 		if err != nil {
 			return err
 		}
 		resp, err := s.Invoke(context.Background(), req)
 		if err != nil {
-			return err
+			// 处理业务 error
+			resp.Error = []byte(err.Error())
 		}
-		res := EncodeMsg(resp.Data)
-		if _, err = conn.Write(res); err != nil {
+		resp.CalHeaderLength()
+		resp.CalBodyLength()
+
+		if _, err = conn.Write(message.EncodeResp(resp)); err != nil {
 			return err
 		}
 	}
@@ -108,7 +115,17 @@ func (s *reflectionStub) invoke(ctx context.Context, methodName string, data []b
 	// results[0] 返回值
 	// results[1] error
 	if results[1].Interface() != nil {
-		return nil, results[1].Interface().(error)
+		err = results[1].Interface().(error)
 	}
-	return json.Marshal(results[0].Interface())
+	var res []byte
+	if results[0].IsNil() {
+		return nil, err
+	} else {
+		var er error
+		res, er = json.Marshal(results[0].Interface())
+		if er != nil {
+			return nil, er
+		}
+	}
+	return res, err
 }

@@ -7,25 +7,17 @@ import (
 
 func ReadMsg(conn net.Conn) ([]byte, error) {
 	lenBs := make([]byte, numOfLengthBytes)
+
 	_, err := conn.Read(lenBs)
 	if err != nil {
 		return nil, err
 	}
+	headerLength := binary.BigEndian.Uint32(lenBs[:4])
+	bodyLength := binary.BigEndian.Uint32(lenBs[4:])
 	// 响应长度
-	length := binary.BigEndian.Uint64(lenBs)
+	length := headerLength + bodyLength
 	data := make([]byte, length)
-	_, err = conn.Read(data)
+	_, err = conn.Read(data[numOfLengthBytes:])
+	copy(data[:numOfLengthBytes], lenBs)
 	return data, err
-}
-
-func EncodeMsg(data []byte) []byte {
-	respLen := len(data)
-
-	// 构建响应数据
-	res := make([]byte, respLen+numOfLengthBytes)
-	// step1.写入长度
-	binary.BigEndian.PutUint64(res[:numOfLengthBytes], uint64(respLen))
-	// step2.写入数据
-	copy(res[numOfLengthBytes:], data)
-	return res
 }

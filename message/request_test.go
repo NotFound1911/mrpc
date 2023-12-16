@@ -58,25 +58,11 @@ func TestEncodeDecode(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.req.calHeaderLen()
-			tc.req.calBodyLen()
+			tc.req.CalHeaderLen()
+			tc.req.CalBodyLen()
 			data := EncodeReq(tc.req)
 			req := DecodeReq(data)
 			assert.Equal(t, tc.req, req)
 		})
 	}
-}
-
-func (req *Request) calHeaderLen() {
-	headLength := 15 + len(req.ServiceName) + 1 + len(req.MethodName) + 1
-	for k, v := range req.Meta {
-		headLength += len(k)
-		headLength++
-		headLength += len(v)
-		headLength++
-	}
-	req.HeadLength = uint32(headLength)
-}
-func (req *Request) calBodyLen() {
-	req.BodyLength = uint32(len(req.Data))
 }

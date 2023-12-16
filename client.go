@@ -59,20 +59,34 @@ func setFuncField(service Service, p Proxy) error {
 			req := &message.Request{
 				ServiceName: service.Name(),
 				MethodName:  fieldTyp.Name,
-				Arg:         reqData,
+				Data:        reqData,
 			}
-
+			req.CalHeaderLen()
+			req.CalBodyLen()
 			// 发起调用，调用代理对象的Invoke方法
 			resp, err := p.Invoke(ctx, req)
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
 			}
-			// 将响应数据解析为目标结构体并赋值给retVal
-			err = json.Unmarshal(resp.Data, retVal.Interface())
-			if err != nil {
-				return []reflect.Value{retVal, reflect.ValueOf(err)}
+			var retErr error
+			if len(resp.Error) > 0 {
+				retErr = errors.New(string(resp.Error))
 			}
-			return []reflect.Value{retVal, reflect.Zero(reflect.TypeOf(new(error)).Elem())}
+			if len(resp.Data) > 0 {
+				// 将响应数据解析为目标结构体并赋值给retVal
+				err = json.Unmarshal(resp.Data, retVal.Interface())
+				if err != nil {
+					// 反序列化的err
+					return []reflect.Value{retVal, reflect.ValueOf(err)}
+				}
+			}
+			var retErrVal reflect.Value
+			if retErr == nil {
+				retErrVal = reflect.Zero(reflect.TypeOf(new(error)).Elem())
+			} else {
+				retErrVal = reflect.ValueOf(retErr)
+			}
+			return []reflect.Value{retVal, retErrVal}
 		}
 		// 使用反射创建一个函数值
 		fnVal := reflect.MakeFunc(fieldTyp.Type, fn)
@@ -107,18 +121,13 @@ func NewClient(addr string) (*Client, error) {
 	}, nil
 }
 func (c Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
+	data := message.EncodeReq(req)
 	// 把请求发送至服务端
 	resp, err := c.Send(data)
 	if err != nil {
 		return nil, err
 	}
-	return &message.Response{
-		Data: resp,
-	}, nil
+	return message.DecodeResp(resp), nil
 }
 
 func (c *Client) Send(data []byte) ([]byte, error) {
@@ -130,8 +139,7 @@ func (c *Client) Send(data []byte) ([]byte, error) {
 	defer func() {
 		c.pool.Put(val)
 	}()
-	req := EncodeMsg(data)
-	_, err = conn.Write(req)
+	_, err = conn.Write(data)
 	if err != nil {
 		return nil, err
 	}

@@ -25,7 +25,6 @@ type Request struct {
 	Meta map[string]string
 	// 协议体
 	Data []byte
-	Arg  []byte
 }
 
 func EncodeReq(req *Request) []byte {
@@ -51,7 +50,7 @@ func EncodeReq(req *Request) []byte {
 	cur = cur[len(req.MethodName):]
 	cur[0] = nameSeparator
 	cur = cur[1:]
-	// meta
+	// 7.meta
 	for k, v := range req.Meta {
 		copy(cur, k)
 		cur = cur[len(k):]
@@ -62,7 +61,7 @@ func EncodeReq(req *Request) []byte {
 		cur[0] = nameSeparator
 		cur = cur[1:]
 	}
-	// data
+	// 8.data
 	copy(cur, req.Data)
 	return bs
 }
@@ -87,7 +86,7 @@ func DecodeReq(data []byte) *Request {
 	index = bytes.IndexByte(header, nameSeparator)
 	req.MethodName = string(header[:index])
 	header = header[index+1:]
-	// meta
+	// 7.meta
 	index = bytes.IndexByte(header, nameSeparator)
 	if index != -1 {
 		meta := make(map[string]string, 8)
@@ -103,9 +102,23 @@ func DecodeReq(data []byte) *Request {
 		}
 		req.Meta = meta
 	}
+	// 8.Data
 	if req.BodyLength != 0 {
 		req.Data = data[req.HeadLength:]
 	}
 
 	return req
+}
+func (req *Request) CalHeaderLen() {
+	headLength := 15 + len(req.ServiceName) + 1 + len(req.MethodName) + 1
+	for k, v := range req.Meta {
+		headLength += len(k)
+		headLength++
+		headLength += len(v)
+		headLength++
+	}
+	req.HeadLength = uint32(headLength)
+}
+func (req *Request) CalBodyLen() {
+	req.BodyLength = uint32(len(req.Data))
 }
