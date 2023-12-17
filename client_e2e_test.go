@@ -152,3 +152,45 @@ func TestInitClientProxy(t *testing.T) {
 		})
 	}
 }
+
+func TestOneway(t *testing.T) {
+	server := NewServer()
+	service := &UserServiceServer{}
+	server.RegisterService(service)
+	go func() {
+		err := server.Start("tcp", ":8081")
+		t.Log("err:", err)
+	}()
+	time.Sleep(time.Second * 3)
+	usClient := &UserService{}        // 客户端服务
+	client, err := NewClient(":8081") // json 协议
+	require.NoError(t, err)
+	err = client.InitService(usClient)
+	require.NoError(t, err)
+	testCases := []struct {
+		name string
+		mock func()
+
+		wantErr  error
+		wantResp *GetByIdResp
+	}{
+		{
+			name: "oneway",
+			mock: func() {
+				service.Err = errors.New("mock error")
+				service.Msg = "test"
+			},
+			wantResp: &GetByIdResp{},
+			wantErr:  errors.New("mrpc: oneway调用，不应该处理任何结果"),
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.mock()
+			ctx := CtxWithOneway(context.Background())
+			resp, err := usClient.GetById(ctx, &GetByIdReq{Id: 123})
+			assert.Equal(t, tc.wantErr, err)
+			assert.Equal(t, tc.wantResp, resp)
+		})
+	}
+}

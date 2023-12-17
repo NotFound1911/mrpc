@@ -51,6 +51,10 @@ func setFuncField(service Service, p Proxy, s serialize.Serializer) error {
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
 			}
+			var meta map[string]string
+			if isOneway(ctx) {
+				meta = map[string]string{"one-way": "true"}
+			}
 			// 创建Request对象
 			// 根据函数字段构建请求
 			req := &message.Request{
@@ -58,6 +62,7 @@ func setFuncField(service Service, p Proxy, s serialize.Serializer) error {
 				MethodName:  fieldTyp.Name,
 				Data:        reqData,
 				Serializer:  s.Code(),
+				Meta:        meta,
 			}
 			req.CalHeaderLen()
 			req.CalBodyLen()
@@ -133,14 +138,14 @@ func NewClient(addr string, opts ...ClientOption) (*Client, error) {
 func (c Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
 	data := message.EncodeReq(req)
 	// 把请求发送至服务端
-	resp, err := c.Send(data)
+	resp, err := c.Send(ctx, data)
 	if err != nil {
 		return nil, err
 	}
 	return message.DecodeResp(resp), nil
 }
 
-func (c *Client) Send(data []byte) ([]byte, error) {
+func (c *Client) Send(ctx context.Context, data []byte) ([]byte, error) {
 	val, err := c.pool.Get()
 	if err != nil {
 		return nil, err
@@ -152,6 +157,9 @@ func (c *Client) Send(data []byte) ([]byte, error) {
 	_, err = conn.Write(data)
 	if err != nil {
 		return nil, err
+	}
+	if isOneway(ctx) {
+		return nil, errors.New("mrpc: oneway调用，不应该处理任何结果")
 	}
 	return ReadMsg(conn)
 }
