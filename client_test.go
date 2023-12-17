@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"github.com/NotFound1911/mrpc/message"
+	"github.com/NotFound1911/mrpc/serialize/json"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
-// $GOPATH/bin/mockgen -destination=mock_proxy_test.gen.go -package=mrpc -source=types.go Proxy
+// cmockgen -destination=mock_proxy_test.gen.go -package=mrpc -source=types.go Proxy
 func Test_setFuncField(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -47,12 +48,12 @@ func Test_setFuncField(t *testing.T) {
 			},
 		},
 	}
+	s := json.Serializer{}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
-
-			err := setFuncField(tc.service, tc.mock(ctrl))
+			err := setFuncField(tc.service, tc.mock(ctrl), s)
 			assert.Equal(t, tc.wantErr, err)
 			if err != nil {
 				return
