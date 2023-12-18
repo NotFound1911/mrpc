@@ -2,26 +2,38 @@ package mrpc
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/NotFound1911/mrpc/serialize/json"
+	"strconv"
+	"time"
+
 	"errors"
 	"github.com/NotFound1911/mrpc/message"
+	"github.com/NotFound1911/mrpc/serialize"
 	"net"
 	"reflect"
 )
 
 type Server struct {
-	services map[string]reflectionStub
+	services    map[string]reflectionStub
+	serializers map[uint8]serialize.Serializer
 }
 
 func NewServer() *Server {
-	return &Server{
-		services: make(map[string]reflectionStub, 16),
+	res := &Server{
+		services:    make(map[string]reflectionStub, 16),
+		serializers: make(map[uint8]serialize.Serializer, 4),
 	}
+	res.RegisterSerializer(&json.Serializer{})
+	return res
+}
+func (s *Server) RegisterSerializer(sl serialize.Serializer) {
+	s.serializers[sl.Code()] = sl
 }
 func (s *Server) RegisterService(service Service) {
 	s.services[service.Name()] = reflectionStub{
-		s:     service,
-		value: reflect.ValueOf(service),
+		s:           service,
+		value:       reflect.ValueOf(service),
+		serializers: s.serializers,
 	}
 }
 
@@ -44,16 +56,17 @@ func (s *Server) Start(network, addr string) error {
 }
 func (s *Server) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
 	service, ok := s.services[req.ServiceName]
-	if !ok {
-		return nil, errors.New("调用的服务不存在")
-	}
 	resp := &message.Response{
 		RequestID:  req.RequestID,
 		Version:    req.Version,
 		Compresser: req.Compresser,
 		Serializer: req.Serializer,
 	}
-	respData, err := service.invoke(ctx, req.MethodName, req.Data)
+	if !ok {
+		return resp, errors.New("调用的服务不存在")
+	}
+
+	respData, err := service.invoke(ctx, req)
 	resp.Data = respData
 	if err != nil {
 		return resp, err
@@ -76,7 +89,19 @@ func (s *Server) handleConn(conn net.Conn) error {
 		if err != nil {
 			return err
 		}
-		resp, err := s.Invoke(context.Background(), req)
+		ctx := context.Background()
+		cancel := func() {}
+		if deadlinStr, ok := req.Meta["deadline"]; ok {
+			if deadline, er := strconv.ParseInt(deadlinStr, 10, 64); er == nil {
+				ctx, cancel = context.WithDeadline(ctx, time.UnixMilli(deadline))
+			}
+		}
+		cancel()
+		oneway, ok := req.Meta["one-way"]
+		if ok && oneway == "true" {
+			ctx = CtxWithOneway(ctx)
+		}
+		resp, err := s.Invoke(ctx, req)
 		if err != nil {
 			// 处理业务 error
 			resp.Error = []byte(err.Error())
@@ -92,20 +117,25 @@ func (s *Server) handleConn(conn net.Conn) error {
 }
 
 type reflectionStub struct {
-	s     Service
-	value reflect.Value
+	s           Service
+	value       reflect.Value
+	serializers map[uint8]serialize.Serializer
 }
 
-func (s *reflectionStub) invoke(ctx context.Context, methodName string, data []byte) ([]byte, error) {
+func (s *reflectionStub) invoke(ctx context.Context, req *message.Request) ([]byte, error) {
 	// 反射找到方法 并执行调用
 	// s.value是通过反射保存的结构体 MethodByName是结构体的方法
-	method := s.value.MethodByName(methodName)
+	method := s.value.MethodByName(req.MethodName)
 	in := make([]reflect.Value, 2)
 
-	in[0] = reflect.ValueOf(context.Background())
+	in[0] = reflect.ValueOf(ctx)
 	inReq := reflect.New(method.Type().In(1).Elem())
 	// 解析请求
-	err := json.Unmarshal(data, inReq.Interface())
+	serializer, ok := s.serializers[req.Serializer]
+	if !ok {
+		return nil, errors.New("unsupported serialization protocol")
+	}
+	err := serializer.Decode(req.Data, inReq.Interface())
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +152,7 @@ func (s *reflectionStub) invoke(ctx context.Context, methodName string, data []b
 		return nil, err
 	} else {
 		var er error
-		res, er = json.Marshal(results[0].Interface())
+		res, er = serializer.Encode(results[0].Interface())
 		if er != nil {
 			return nil, er
 		}

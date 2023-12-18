@@ -2,26 +2,24 @@ package mrpc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"github.com/NotFound1911/mrpc/message"
+	"github.com/NotFound1911/mrpc/serialize"
+	"github.com/NotFound1911/mrpc/serialize/json"
 	"github.com/silenceper/pool"
 	"net"
 	"reflect"
+	"strconv"
 	"time"
 )
 
 const numOfLengthBytes = 8
 
-// InitClientProxy 为GetById之类的函数类型字段赋值
-func InitClientProxy(addr string, service Service) error {
-	client, err := NewClient(addr)
-	if err != nil {
-		return err
-	}
-	return setFuncField(service, client)
+// InitService 为GetById之类的函数类型字段赋值
+func (c *Client) InitService(service Service) error {
+	return setFuncField(service, c, c.serializer)
 }
-func setFuncField(service Service, p Proxy) error {
+func setFuncField(service Service, p Proxy, s serialize.Serializer) error {
 	if service == nil {
 		return errors.New("mrpc: 不支持nil")
 	}
@@ -49,10 +47,17 @@ func setFuncField(service Service, p Proxy) error {
 			ctx := args[0].Interface().(context.Context)
 			// retVal 是一个指向输出参数类型的新指针，用于存储远程调用的结果
 			retVal := reflect.New(fieldTyp.Type.Out(0).Elem())
-			// 将请求数据序列化为JSON
-			reqData, err := json.Marshal(args[1].Interface())
+			// 将请求数据序列化为
+			reqData, err := s.Encode(args[1].Interface())
 			if err != nil {
 				return []reflect.Value{retVal, reflect.ValueOf(err)}
+			}
+			meta := make(map[string]string, 2)
+			if deadline, ok := ctx.Deadline(); ok {
+				meta["deadline"] = strconv.FormatInt(deadline.UnixMilli(), 10)
+			}
+			if isOneway(ctx) {
+				meta = map[string]string{"one-way": "true"}
 			}
 			// 创建Request对象
 			// 根据函数字段构建请求
@@ -60,6 +65,8 @@ func setFuncField(service Service, p Proxy) error {
 				ServiceName: service.Name(),
 				MethodName:  fieldTyp.Name,
 				Data:        reqData,
+				Serializer:  s.Code(),
+				Meta:        meta,
 			}
 			req.CalHeaderLen()
 			req.CalBodyLen()
@@ -74,7 +81,7 @@ func setFuncField(service Service, p Proxy) error {
 			}
 			if len(resp.Data) > 0 {
 				// 将响应数据解析为目标结构体并赋值给retVal
-				err = json.Unmarshal(resp.Data, retVal.Interface())
+				err = s.Decode(resp.Data, retVal.Interface())
 				if err != nil {
 					// 反序列化的err
 					return []reflect.Value{retVal, reflect.ValueOf(err)}
@@ -97,10 +104,17 @@ func setFuncField(service Service, p Proxy) error {
 }
 
 type Client struct {
-	pool pool.Pool
+	pool       pool.Pool
+	serializer serialize.Serializer
 }
+type ClientOption func(client *Client)
 
-func NewClient(addr string) (*Client, error) {
+func ClientWithSerializer(sl serialize.Serializer) ClientOption {
+	return func(client *Client) {
+		client.serializer = sl
+	}
+}
+func NewClient(addr string, opts ...ClientOption) (*Client, error) {
 	p, err := pool.NewChannelPool(&pool.Config{
 		InitialCap:  5,
 		MaxCap:      30,
@@ -116,21 +130,47 @@ func NewClient(addr string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
-		pool: p,
-	}, nil
+	res := &Client{
+		pool:       p,
+		serializer: &json.Serializer{},
+	}
+	for _, opt := range opts {
+		opt(res)
+	}
+	return res, nil
 }
-func (c Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
+func (c *Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	ch := make(chan struct{})
+	defer func() {
+		close(ch)
+	}()
+	var (
+		resp *message.Response
+		err  error
+	)
+	go func() {
+		resp, err = c.doInvoke(ctx, req)
+		ch <- struct{}{}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-ch:
+		return resp, err
+	}
+}
+func (c *Client) doInvoke(ctx context.Context, req *message.Request) (*message.Response, error) {
 	data := message.EncodeReq(req)
-	// 把请求发送至服务端
-	resp, err := c.Send(data)
+	resp, err := c.send(ctx, data) // 请求发送到服务端
 	if err != nil {
 		return nil, err
 	}
 	return message.DecodeResp(resp), nil
 }
-
-func (c *Client) Send(data []byte) ([]byte, error) {
+func (c *Client) send(ctx context.Context, data []byte) ([]byte, error) {
 	val, err := c.pool.Get()
 	if err != nil {
 		return nil, err
@@ -142,6 +182,9 @@ func (c *Client) Send(data []byte) ([]byte, error) {
 	_, err = conn.Write(data)
 	if err != nil {
 		return nil, err
+	}
+	if isOneway(ctx) {
+		return nil, errors.New("mrpc: oneway调用，不应该处理任何结果")
 	}
 	return ReadMsg(conn)
 }
