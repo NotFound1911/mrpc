@@ -3,6 +3,8 @@ package mrpc
 import (
 	"context"
 	"github.com/NotFound1911/mrpc/serialize/json"
+	"strconv"
+	"time"
 
 	"errors"
 	"github.com/NotFound1911/mrpc/message"
@@ -87,7 +89,19 @@ func (s *Server) handleConn(conn net.Conn) error {
 		if err != nil {
 			return err
 		}
-		resp, err := s.Invoke(context.Background(), req)
+		ctx := context.Background()
+		cancel := func() {}
+		if deadlinStr, ok := req.Meta["deadline"]; ok {
+			if deadline, er := strconv.ParseInt(deadlinStr, 10, 64); er == nil {
+				ctx, cancel = context.WithDeadline(ctx, time.UnixMilli(deadline))
+			}
+		}
+		cancel()
+		oneway, ok := req.Meta["one-way"]
+		if ok && oneway == "true" {
+			ctx = CtxWithOneway(ctx)
+		}
+		resp, err := s.Invoke(ctx, req)
 		if err != nil {
 			// 处理业务 error
 			resp.Error = []byte(err.Error())
@@ -114,7 +128,7 @@ func (s *reflectionStub) invoke(ctx context.Context, req *message.Request) ([]by
 	method := s.value.MethodByName(req.MethodName)
 	in := make([]reflect.Value, 2)
 
-	in[0] = reflect.ValueOf(context.Background())
+	in[0] = reflect.ValueOf(ctx)
 	inReq := reflect.New(method.Type().In(1).Elem())
 	// 解析请求
 	serializer, ok := s.serializers[req.Serializer]
